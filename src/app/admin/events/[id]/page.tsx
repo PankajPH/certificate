@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -21,6 +21,9 @@ import {
   Plus,
   ExternalLink,
   RefreshCw,
+  ImagePlus,
+  Upload,
+  Trash,
 } from "lucide-react";
 
 type EventStatus = "draft" | "published" | "archived";
@@ -36,6 +39,8 @@ interface EventItem {
   city: string;
   organizer: string;
   status: EventStatus;
+  imageUrl?: string;
+  hasImage?: boolean;
 }
 
 interface CategoryItem {
@@ -58,6 +63,7 @@ export default function EventDetailsPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const id = params.id;
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [event, setEvent] = useState<EventItem | null>(null);
   const [form, setForm] = useState<EventItem | null>(null);
@@ -67,6 +73,10 @@ export default function EventDetailsPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [deleting, setDeleting] = useState(false);
+
+  const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState("");
+  const [removeImage, setRemoveImage] = useState(false);
 
   const categoriesUrl = `/admin/events/${id}/categories`;
 
@@ -87,10 +97,14 @@ export default function EventDetailsPage() {
       const categoriesResult = await categoriesResponse.json();
 
       if (!categoriesResponse.ok || !categoriesResult.success) {
-        throw new Error(categoriesResult.message || "Unable to load event categories.");
+        throw new Error(
+          categoriesResult.message || "Unable to load event categories."
+        );
       }
 
-      const categories: CategoryItem[] = Array.isArray(categoriesResult.categories)
+      const categories: CategoryItem[] = Array.isArray(
+        categoriesResult.categories
+      )
         ? categoriesResult.categories
         : [];
 
@@ -131,7 +145,9 @@ export default function EventDetailsPage() {
 
           return {
             ...category,
-            participantCount: Number.isFinite(participantCount) ? participantCount : 0,
+            participantCount: Number.isFinite(participantCount)
+              ? participantCount
+              : 0,
             generatedCount: Number(certificateStats.generatedCount ?? 0),
             downloadedCount: Number(certificateStats.downloadedCount ?? 0),
             totalDownloads: Number(certificateStats.totalDownloads ?? 0),
@@ -154,7 +170,6 @@ export default function EventDetailsPage() {
   useEffect(() => {
     void fetchOverview();
 
-    // Keep certificate and participant statistics current while this page is open.
     const refreshInterval = window.setInterval(() => {
       if (document.visibilityState === "visible") {
         void fetchOverview(true);
@@ -185,10 +200,12 @@ export default function EventDetailsPage() {
     (total, category) => total + category.participantCount,
     0
   );
+
   const totalGenerated = categorySummaries.reduce(
     (total, category) => total + category.generatedCount,
     0
   );
+
   const totalDownloaded = categorySummaries.reduce(
     (total, category) => total + category.downloadedCount,
     0
@@ -209,12 +226,22 @@ export default function EventDetailsPage() {
         throw new Error(result.message || "Unable to load event.");
       }
 
-      setEvent(result.event);
-      setForm({
+      const loadedEvent: EventItem = {
         ...result.event,
+        organizer: result.event.organizer || "",
         startDate: result.event.startDate.slice(0, 10),
         endDate: result.event.endDate.slice(0, 10),
-      });
+      };
+
+      setEvent(loadedEvent);
+      setForm(loadedEvent);
+
+      setImagePreview(
+        result.event.imageUrl ||
+          (result.event.hasImage
+            ? `/api/events/${id}/image`
+            : "")
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load event.");
     } finally {
@@ -226,10 +253,85 @@ export default function EventDetailsPage() {
     void fetchEvent();
   }, [fetchEvent]);
 
+  useEffect(() => {
+    return () => {
+      if (imagePreview.startsWith("blob:")) {
+        URL.revokeObjectURL(imagePreview);
+      }
+    };
+  }, [imagePreview]);
+
   const updateField = (key: keyof EventItem, value: string) => {
     setForm((previous) =>
       previous ? { ...previous, [key]: value } : previous
     );
+  };
+
+  const handleImageChange = (file?: File) => {
+    if (!file) return;
+
+    const allowedTypes = [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/gif",
+    ];
+
+    if (!allowedTypes.includes(file.type)) {
+      setError("Please upload a JPG, PNG, WEBP or GIF image.");
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setError("Image size must not exceed 5 MB.");
+      return;
+    }
+
+    setError("");
+    setSuccess("");
+
+    setSelectedImage(file);
+    setRemoveImage(false);
+
+    setImagePreview((previous) => {
+      if (previous.startsWith("blob:")) {
+        URL.revokeObjectURL(previous);
+      }
+
+      return URL.createObjectURL(file);
+    });
+  };
+
+  const handleRemoveImage = () => {
+    setSelectedImage(null);
+    setRemoveImage(true);
+
+    setImagePreview((previous) => {
+      if (previous.startsWith("blob:")) {
+        URL.revokeObjectURL(previous);
+      }
+
+      return "";
+    });
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const resetImageChanges = () => {
+    setSelectedImage(null);
+    setRemoveImage(false);
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+
+    const originalImage =
+      event?.imageUrl ||
+      (event?.hasImage ? `/api/events/${id}/image` : "");
+
+    setImagePreview(originalImage || "");
   };
 
   const saveChanges = async () => {
@@ -246,10 +348,29 @@ export default function EventDetailsPage() {
     try {
       setSaving(true);
 
+      const formData = new FormData();
+
+      formData.append("name", form.name);
+      formData.append("slug", form.slug);
+      formData.append("description", form.description || "");
+      formData.append("startDate", form.startDate);
+      formData.append("endDate", form.endDate);
+      formData.append("venue", form.venue);
+      formData.append("city", form.city);
+      formData.append("organizer", form.organizer || "");
+      formData.append("status", form.status);
+
+      if (selectedImage) {
+        formData.append("image", selectedImage);
+      }
+
+      if (removeImage) {
+        formData.append("removeImage", "true");
+      }
+
       const response = await fetch(`/api/events/${id}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: formData,
       });
 
       const result = await response.json();
@@ -258,12 +379,29 @@ export default function EventDetailsPage() {
         throw new Error(result.message || "Unable to update event.");
       }
 
-      setEvent(result.event);
-      setForm({
+      const updatedEvent: EventItem = {
         ...result.event,
+        organizer: result.event.organizer || "",
         startDate: result.event.startDate.slice(0, 10),
         endDate: result.event.endDate.slice(0, 10),
-      });
+      };
+
+      setEvent(updatedEvent);
+      setForm(updatedEvent);
+
+      setSelectedImage(null);
+      setRemoveImage(false);
+
+      setImagePreview(
+        result.event.imageUrl ||
+          (result.event.hasImage
+            ? `/api/events/${id}/image`
+            : "")
+      );
+
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
 
       setEditing(false);
       setSuccess("Event updated successfully.");
@@ -287,6 +425,8 @@ export default function EventDetailsPage() {
       startDate: event.startDate.slice(0, 10),
       endDate: event.endDate.slice(0, 10),
     });
+
+    resetImageChanges();
   };
 
   const deleteEvent = async () => {
@@ -422,7 +562,10 @@ export default function EventDetailsPage() {
 
       {/* Notifications */}
       {error && (
-        <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div
+          role="alert"
+          className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700"
+        >
           {error}
         </div>
       )}
@@ -433,7 +576,7 @@ export default function EventDetailsPage() {
         </div>
       )}
 
-      {/* Event summary */}
+      {/* Event Summary */}
       <div className="grid gap-4 sm:grid-cols-3">
         {[
           {
@@ -445,14 +588,18 @@ export default function EventDetailsPage() {
           },
           {
             label: "Participants",
-            value: overviewLoading ? "…" : totalParticipants.toLocaleString("en-IN"),
+            value: overviewLoading
+              ? "…"
+              : totalParticipants.toLocaleString("en-IN"),
             description: "Active participants across categories",
             icon: Users,
             href: categoriesUrl,
           },
           {
             label: "Certificates",
-            value: overviewLoading ? "…" : totalGenerated.toLocaleString("en-IN"),
+            value: overviewLoading
+              ? "…"
+              : totalGenerated.toLocaleString("en-IN"),
             description: `${totalDownloaded.toLocaleString("en-IN")} downloaded certificates`,
             icon: Award,
             href: categoriesUrl,
@@ -464,13 +611,17 @@ export default function EventDetailsPage() {
             <Link key={item.label} href={item.href}>
               <div className="h-full rounded-2xl border border-[#f1e6df] bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:border-orange-200 hover:shadow-md">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-[#927e72]">{item.label}</span>
+                  <span className="text-sm text-[#927e72]">
+                    {item.label}
+                  </span>
                   <Icon size={20} className="text-orange-600" />
                 </div>
                 <p className="mt-4 text-2xl font-bold tabular-nums text-[#241000]">
                   {item.value}
                 </p>
-                <p className="mt-1 text-xs text-[#927e72]">{item.description}</p>
+                <p className="mt-1 text-xs text-[#927e72]">
+                  {item.description}
+                </p>
               </div>
             </Link>
           );
@@ -490,7 +641,7 @@ export default function EventDetailsPage() {
             <h2 className="font-bold text-[#241000]">Event Information</h2>
             <p className="mt-1 text-xs text-[#927e72]">
               {editing
-                ? "Update your event details."
+                ? "Update your event details and banner image."
                 : "Your saved event details."}
             </p>
           </div>
@@ -636,7 +787,7 @@ export default function EventDetailsPage() {
             ) : (
               <p className="mt-2 flex items-center gap-2 text-sm text-[#604a3d]">
                 <Building2 size={16} className="text-orange-600" />
-                {event.organizer}
+                {event.organizer || "Not specified"}
               </p>
             )}
           </div>
@@ -658,6 +809,107 @@ export default function EventDetailsPage() {
             ) : (
               <p className="mt-2 text-sm capitalize text-[#604a3d]">
                 {event.status}
+              </p>
+            )}
+          </div>
+
+          {/* Event Banner Image */}
+          <div className="md:col-span-2">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <label className={labelClass}>Event Banner Image</label>
+                <p className="mt-1 text-xs text-[#927e72]">
+                  JPG, PNG, WEBP or GIF. Maximum file size: 5 MB.
+                  And the image dimensions must be 1920 × 900 px
+                </p>
+              </div>
+
+              {editing && (
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5 text-sm font-semibold text-orange-700 transition hover:bg-orange-100"
+                >
+                  <Upload size={16} />
+                  {imagePreview ? "Replace Image" : "Upload Image"}
+                </button>
+              )}
+            </div>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif"
+              className="hidden"
+              disabled={!editing}
+              onChange={(e) => handleImageChange(e.target.files?.[0])}
+            />
+
+            {imagePreview ? (
+              <div className="relative mt-4 overflow-hidden rounded-2xl border border-[#eee2da] bg-[#fffaf7]">
+                <img
+                  src={imagePreview}
+                  alt="Event banner preview"
+                  className="h-52 w-full object-cover sm:h-64"
+                />
+
+                {editing && (
+                  <div className="absolute right-3 top-3 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="inline-flex items-center gap-2 rounded-lg bg-white/95 px-3 py-2 text-xs font-semibold text-[#604a3d] shadow-md transition hover:bg-white"
+                    >
+                      <ImagePlus size={14} />
+                      Replace
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleRemoveImage}
+                      className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white shadow-md transition hover:bg-red-700"
+                    >
+                      <Trash size={14} />
+                      Remove
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="mt-4 flex min-h-44 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-[#eadbd1] bg-[#fffaf7] px-5 py-8 text-center">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-orange-500 shadow-sm">
+                  <ImagePlus size={23} />
+                </div>
+                <p className="mt-3 text-sm font-semibold text-[#49372c]">
+                  No event banner uploaded
+                </p>
+                <p className="mt-1 text-xs text-[#927e72]">
+                  {editing
+                    ? "Upload an image to use as the public event banner."
+                    : "You can add a banner image by editing this event."}
+                </p>
+                {editing && (
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#EA580C] px-4 py-2.5 text-xs font-bold text-white transition hover:bg-[#c94b08]"
+                  >
+                    <Upload size={14} />
+                    Choose Image
+                  </button>
+                )}
+              </div>
+            )}
+
+            {editing && selectedImage && (
+              <p className="mt-2 text-xs font-medium text-emerald-700">
+                Selected: {selectedImage.name}
+              </p>
+            )}
+
+            {editing && removeImage && (
+              <p className="mt-2 text-xs font-medium text-red-600">
+                The current event image will be removed when you save.
               </p>
             )}
           </div>
@@ -686,9 +938,13 @@ export default function EventDetailsPage() {
               disabled={overviewLoading}
               className="inline-flex items-center justify-center gap-2 rounded-xl border border-[#eee2da] bg-white px-4 py-3 text-sm font-semibold text-[#604a3d] transition hover:bg-[#fffaf7] disabled:opacity-60"
             >
-              <RefreshCw size={16} className={overviewLoading ? "animate-spin" : ""} />
+              <RefreshCw
+                size={16}
+                className={overviewLoading ? "animate-spin" : ""}
+              />
               Refresh
             </button>
+
             <Link
               href={categoriesUrl}
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#EA580C] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#c94b08]"
@@ -733,7 +989,9 @@ export default function EventDetailsPage() {
                 <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="font-bold text-[#241000]">{category.name}</h3>
+                      <h3 className="font-bold text-[#241000]">
+                        {category.name}
+                      </h3>
                       <span
                         className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
                           category.isActive
@@ -744,9 +1002,11 @@ export default function EventDetailsPage() {
                         {category.isActive ? "Active" : "Inactive"}
                       </span>
                     </div>
+
                     <p className="mt-1 text-xs text-[#927e72]">
                       /{category.slug}
                     </p>
+
                     {category.description && (
                       <p className="mt-2 line-clamp-2 text-xs leading-5 text-[#806e63]">
                         {category.description}
@@ -762,12 +1022,14 @@ export default function EventDetailsPage() {
                       {category.participantCount.toLocaleString("en-IN")}
                     </p>
                   </div>
+
                   <div className="rounded-lg bg-white p-3">
                     <p className="text-[11px] text-[#927e72]">Generated</p>
                     <p className="mt-1 text-lg font-bold tabular-nums text-[#241000]">
                       {category.generatedCount.toLocaleString("en-IN")}
                     </p>
                   </div>
+
                   <div className="rounded-lg bg-white p-3">
                     <p className="text-[11px] text-[#927e72]">Downloaded</p>
                     <p className="mt-1 text-lg font-bold tabular-nums text-[#241000]">
@@ -781,13 +1043,16 @@ export default function EventDetailsPage() {
                     href={`${categoriesUrl}/${category._id}/participants`}
                     className="inline-flex items-center gap-2 rounded-lg border border-[#eee2da] bg-white px-3 py-2 text-xs font-semibold text-[#604a3d] transition hover:border-orange-200 hover:text-orange-700"
                   >
-                    <Users size={14} /> Participants
+                    <Users size={14} />
+                    Participants
                   </Link>
+
                   <Link
                     href={`${categoriesUrl}/${category._id}/certificates`}
                     className="inline-flex items-center gap-2 rounded-lg border border-[#eee2da] bg-white px-3 py-2 text-xs font-semibold text-[#604a3d] transition hover:border-orange-200 hover:text-orange-700"
                   >
-                    <Award size={14} /> Certificates
+                    <Award size={14} />
+                    Certificates
                   </Link>
                 </div>
               </article>

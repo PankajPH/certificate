@@ -1,11 +1,10 @@
+
 import { notFound } from "next/navigation";
 
 import { connectDB } from "@/lib/mongodb";
 import Event from "@/models/Event";
 import PublicEventPage from "./PublicEventPage";
 
-// Allow this route to render at request time instead of
-// attempting to prerender MongoDB data during the build.
 export const instant = false;
 
 type PageProps = {
@@ -21,12 +20,18 @@ export default async function PublicEventRoute({ params }: PageProps) {
     slug: slug.toLowerCase(),
     status: "published",
   })
-    .select("name slug description startDate endDate venue city organizer")
+    .select(
+      "name slug description startDate endDate venue city organizer imageFileId"
+    )
     .lean();
 
   if (!event) {
     notFound();
   }
+
+  const imageUrl = event.imageFileId
+    ? `/api/public/events/${encodeURIComponent(event.slug)}/image`
+    : "";
 
   return (
     <PublicEventPage
@@ -38,7 +43,8 @@ export default async function PublicEventRoute({ params }: PageProps) {
         endDate: new Date(event.endDate).toISOString(),
         venue: event.venue,
         city: event.city,
-        organizer: event.organizer,
+        organizer: event.organizer || "",
+        imageUrl,
       }}
     />
   );

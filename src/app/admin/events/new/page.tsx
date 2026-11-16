@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -15,10 +15,24 @@ import {
   Save,
   Send,
   Sparkles,
+  ImagePlus,
+  Upload,
+  X,
 } from "lucide-react";
+
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+
+const ALLOWED_IMAGE_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "image/avif",
+];
 
 export default function CreateEventPage() {
   const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [form, setForm] = useState({
     name: "",
@@ -31,6 +45,10 @@ export default function CreateEventPage() {
     organizer: "",
     status: "draft",
   });
+
+  const [image, setImage] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState("");
+  const [imageError, setImageError] = useState("");
 
   const [slugManuallyEdited, setSlugManuallyEdited] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -52,6 +70,41 @@ export default function CreateEventPage() {
     });
   };
 
+  const handleImageChange = (file?: File) => {
+    setImageError("");
+
+    if (!file) return;
+
+    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+      setImageError(
+        "Unsupported format. Please upload PNG, JPG, WEBP, GIF or AVIF. And the image dimensions must be 1920 × 900 px"
+      );
+      return;
+    }
+
+    if (file.size > MAX_IMAGE_SIZE) {
+      setImageError("Image size must not exceed 5 MB.");
+      return;
+    }
+
+    setImage(file);
+    setImagePreview(URL.createObjectURL(file));
+  };
+
+  const removeImage = () => {
+    if (imagePreview) {
+      URL.revokeObjectURL(imagePreview);
+    }
+
+    setImage(null);
+    setImagePreview("");
+    setImageError("");
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
   const handleSubmit = async (status: "draft" | "published") => {
     setError("");
 
@@ -61,8 +114,7 @@ export default function CreateEventPage() {
       !form.startDate ||
       !form.endDate ||
       !form.venue.trim() ||
-      !form.city.trim() ||
-      !form.organizer.trim()
+      !form.city.trim()
     ) {
       setError("Please fill in all required fields.");
       return;
@@ -76,15 +128,23 @@ export default function CreateEventPage() {
     try {
       setLoading(true);
 
+      const formData = new FormData();
+
+      Object.entries({
+        ...form,
+        status,
+        organizer: form.organizer.trim(),
+      }).forEach(([key, value]) => {
+        formData.append(key, value);
+      });
+
+      if (image) {
+        formData.append("image", image);
+      }
+
       const response = await fetch("/api/events", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          ...form,
-          status,
-        }),
+        body: formData,
       });
 
       const result = await response.json();
@@ -160,6 +220,7 @@ export default function CreateEventPage() {
               <div className="rounded-xl bg-orange-50 p-2.5 text-orange-600">
                 <FileText size={19} />
               </div>
+
               <div>
                 <h3 className="text-sm font-bold text-[#241000]">
                   Basic Details
@@ -172,9 +233,7 @@ export default function CreateEventPage() {
 
             <div className="grid gap-5 md:grid-cols-2">
               <div className="md:col-span-2">
-                <label className={labelClass}>
-                  Event Name *
-                </label>
+                <label className={labelClass}>Event Name *</label>
                 <input
                   value={form.name}
                   onChange={(e) => updateField("name", e.target.value)}
@@ -185,13 +244,13 @@ export default function CreateEventPage() {
               </div>
 
               <div className="md:col-span-2">
-                <label className={labelClass}>
-                  Event URL Slug *
-                </label>
+                <label className={labelClass}>Event URL Slug *</label>
+
                 <div className="mt-2 flex overflow-hidden rounded-xl border border-[#eee2da] bg-[#fffdfb] focus-within:border-orange-400 focus-within:ring-2 focus-within:ring-orange-100">
                   <span className="flex items-center border-r border-[#eee2da] bg-[#faf4f0] px-3 text-xs text-[#927e72]">
                     /events/
                   </span>
+
                   <input
                     value={form.slug}
                     onChange={(e) => {
@@ -209,15 +268,14 @@ export default function CreateEventPage() {
                     className="h-12 min-w-0 flex-1 bg-transparent px-4 text-sm text-[#241000] outline-none"
                   />
                 </div>
+
                 <p className="mt-2 text-xs text-[#a18d81]">
                   Automatically generated from the event name. You can edit it.
                 </p>
               </div>
 
               <div className="md:col-span-2">
-                <label className={labelClass}>
-                  Event Description
-                </label>
+                <label className={labelClass}>Event Description</label>
                 <textarea
                   value={form.description}
                   onChange={(e) =>
@@ -234,12 +292,117 @@ export default function CreateEventPage() {
 
           <div className="border-t border-[#f3ebe6]" />
 
+          {/* Event image */}
+          <section>
+            <div className="mb-5 flex items-center gap-3">
+              <div className="rounded-xl bg-orange-50 p-2.5 text-orange-600">
+                <ImagePlus size={19} />
+              </div>
+
+              <div>
+                <h3 className="text-sm font-bold text-[#241000]">
+                  Event Image
+                </h3>
+                <p className="text-xs text-[#9a877c]">
+                  Upload the banner image displayed on your public event page
+                </p>
+              </div>
+            </div>
+
+            {imagePreview ? (
+              <div className="overflow-hidden rounded-2xl border border-[#eee2da] bg-[#fffaf7]">
+                <div className="relative">
+                  <img
+                    src={imagePreview}
+                    alt="Event image preview"
+                    className="h-56 w-full object-cover sm:h-72"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={removeImage}
+                    className="absolute right-3 top-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-white text-red-600 shadow-lg transition hover:bg-red-50"
+                    aria-label="Remove selected image"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-[#49372c]">
+                      {image?.name}
+                    </p>
+                    <p className="text-xs text-[#9a877c]">
+                      {image
+                        ? `${(image.size / 1024 / 1024).toFixed(2)} MB`
+                        : ""}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#eee2da] bg-white px-4 py-2 text-xs font-semibold text-[#604a3d] transition hover:border-orange-200 hover:text-orange-700"
+                  >
+                    <Upload size={14} />
+                    Change Image
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex min-h-48 w-full flex-col items-center justify-center rounded-2xl border-2 border-dashed border-[#ead8ca] bg-[#fffaf7] px-5 py-8 text-center transition hover:border-orange-400 hover:bg-orange-50/50"
+              >
+                <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-orange-100 text-orange-600">
+                  <ImagePlus size={26} />
+                </span>
+
+                <span className="mt-4 text-sm font-bold text-[#49372c]">
+                  Upload event image
+                </span>
+
+                <span className="mt-1 text-xs text-[#9a877c]">
+                  Click to browse PNG, JPG, WEBP, GIF or AVIF
+                </span>
+
+                <span className="mt-2 text-[11px] text-[#ad988b]">
+                  Maximum file size: 5 MB · Optional
+                  And the image dimensions must be 1920 × 900 px
+                </span>
+              </button>
+            )}
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif,image/avif"
+              className="hidden"
+              onChange={(e) => handleImageChange(e.target.files?.[0])}
+            />
+
+            {imageError && (
+              <p className="mt-3 text-xs font-medium text-red-600">
+                {imageError}
+              </p>
+            )}
+
+            <p className="mt-3 text-xs text-[#a18d81]">
+              This image will appear as the main banner background on your public event page.
+            </p>
+          </section>
+
+          <div className="border-t border-[#f3ebe6]" />
+
           {/* Dates */}
           <section>
             <div className="mb-5 flex items-center gap-3">
               <div className="rounded-xl bg-orange-50 p-2.5 text-orange-600">
                 <CalendarDays size={19} />
               </div>
+
               <div>
                 <h3 className="text-sm font-bold text-[#241000]">
                   Event Schedule
@@ -252,9 +415,7 @@ export default function CreateEventPage() {
 
             <div className="grid gap-5 md:grid-cols-2">
               <div>
-                <label className={labelClass}>
-                  Start Date *
-                </label>
+                <label className={labelClass}>Start Date *</label>
                 <input
                   type="date"
                   value={form.startDate}
@@ -266,9 +427,7 @@ export default function CreateEventPage() {
               </div>
 
               <div>
-                <label className={labelClass}>
-                  End Date *
-                </label>
+                <label className={labelClass}>End Date *</label>
                 <input
                   type="date"
                   min={form.startDate || undefined}
@@ -290,6 +449,7 @@ export default function CreateEventPage() {
               <div className="rounded-xl bg-orange-50 p-2.5 text-orange-600">
                 <MapPin size={19} />
               </div>
+
               <div>
                 <h3 className="text-sm font-bold text-[#241000]">
                   Location & Organizer
@@ -302,9 +462,7 @@ export default function CreateEventPage() {
 
             <div className="grid gap-5 md:grid-cols-2">
               <div>
-                <label className={labelClass}>
-                  Venue *
-                </label>
+                <label className={labelClass}>Venue *</label>
                 <input
                   value={form.venue}
                   onChange={(e) => updateField("venue", e.target.value)}
@@ -315,9 +473,7 @@ export default function CreateEventPage() {
               </div>
 
               <div>
-                <label className={labelClass}>
-                  City *
-                </label>
+                <label className={labelClass}>City *</label>
                 <input
                   value={form.city}
                   onChange={(e) => updateField("city", e.target.value)}
@@ -329,13 +485,18 @@ export default function CreateEventPage() {
 
               <div className="md:col-span-2">
                 <label className={labelClass}>
-                  Organizer Name *
+                  Organizer Name{" "}
+                  <span className="font-normal text-[#a18d81]">
+                    (Optional)
+                  </span>
                 </label>
+
                 <div className="relative">
                   <Building2
                     size={17}
                     className="absolute left-4 top-1/2 -translate-y-1/2 text-[#a18d81]"
                   />
+
                   <input
                     value={form.organizer}
                     onChange={(e) =>
@@ -357,6 +518,7 @@ export default function CreateEventPage() {
             <h3 className="text-sm font-bold text-[#241000]">
               Publication Status
             </h3>
+
             <p className="mt-1 text-xs text-[#9a877c]">
               Choose whether to save as a draft or publish immediately.
             </p>
@@ -377,6 +539,7 @@ export default function CreateEventPage() {
                   <Save size={17} className="text-orange-600" />
                   Save as Draft
                 </div>
+
                 <p className="mt-2 text-xs leading-5 text-[#927e72]">
                   Keep the event private while you prepare its categories and certificates.
                 </p>
@@ -397,6 +560,7 @@ export default function CreateEventPage() {
                   <Send size={17} className="text-orange-600" />
                   Publish Event
                 </div>
+
                 <p className="mt-2 text-xs leading-5 text-[#927e72]">
                   Mark the event as published. You can still manage its details.
                 </p>
@@ -423,7 +587,7 @@ export default function CreateEventPage() {
               type="button"
               disabled={loading}
               onClick={() =>
-                handleSubmit(form.status as "draft" | "published")
+                void handleSubmit(form.status as "draft" | "published")
               }
               className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-[#EA580C] px-7 text-sm font-semibold text-white shadow-lg shadow-orange-100 transition hover:bg-[#c94b08] disabled:cursor-not-allowed disabled:opacity-60"
             >
