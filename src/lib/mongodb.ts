@@ -31,14 +31,18 @@ export async function connectDB(): Promise<typeof mongoose> {
 
   if (!cached.promise) {
     cached.promise = mongoose.connect(MONGODB_URI!, {
-      dbName: "certificate-studio",
       bufferCommands: false,
     });
   }
 
   try {
     cached.conn = await cached.promise;
-    console.log("MongoDB connected successfully");
+
+    console.log(
+      "MongoDB connected successfully:",
+      mongoose.connection.name
+    );
+
     return cached.conn;
   } catch (error) {
     cached.promise = null;
